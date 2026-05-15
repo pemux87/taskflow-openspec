@@ -2,6 +2,7 @@
 *.sqlite
 .env
 .env.local
+.env.production.local
 __pycache__/
 *.pyc
 *.pyo
@@ -10,3 +11,5 @@ node_modules/
 .claude/settings.local.json
 venv/
 .venv/
+
+.vercel
