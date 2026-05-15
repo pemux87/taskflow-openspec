@@ -14,12 +14,12 @@ export function renderSignup(app) {
           <div>
             <input type="email" id="email" placeholder="이메일 입력"
               class="w-full border border-gray-300 rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-teal-500 text-sm" required />
-            <p id="email-err" class="hidden text-red-500 text-xs mt-1">올바른 이메일 형식이 아닙니다</p>
+            <p id="email-err" class="hidden text-red-500 text-xs mt-1"></p>
           </div>
           <div>
             <input type="password" id="password" placeholder="비밀번호 (8자 이상)"
               class="w-full border border-gray-300 rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-teal-500 text-sm" required />
-            <p id="pw-err" class="hidden text-red-500 text-xs mt-1">8자 이상 입력해주세요</p>
+            <p id="pw-err" class="hidden text-red-500 text-xs mt-1">⚠ 8자 이상 입력해주세요</p>
           </div>
           <button type="submit" id="submit-btn"
             class="w-full bg-teal-600 text-white rounded-lg py-3 font-semibold hover:bg-teal-700 transition disabled:opacity-60">
@@ -48,6 +48,7 @@ export function renderSignup(app) {
 
     let valid = true;
     if (!emailInput.value.match(/^[^\s@]+@[^\s@]+\.[^\s@]+$/)) {
+      emailErr.textContent = '⚠ 올바른 이메일 형식이 아닙니다';
       emailErr.classList.remove('hidden');
       valid = false;
     }
@@ -70,11 +71,12 @@ export function renderSignup(app) {
     } catch (err) {
       const code = err?.error?.code;
       if (code === 'EMAIL_TAKEN') {
-        errorMsg.textContent = '이미 가입된 이메일입니다';
+        emailErr.textContent = '✕ 이미 가입된 이메일입니다';
+        emailErr.classList.remove('hidden');
       } else {
         errorMsg.textContent = '가입 중 오류가 발생했습니다';
+        errorMsg.classList.remove('hidden');
       }
-      errorMsg.classList.remove('hidden');
       btn.textContent = '가입하기';
       btn.disabled = false;
     }

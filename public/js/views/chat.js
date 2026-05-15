@@ -1,12 +1,20 @@
 import { api } from '../api.js';
 import { Auth } from '../auth.js';
 
-let pollTimer = null;
+let pollTimeoutId = null;
 let lastSince = null;
+let retryCount = 0;
+let isFocused = false;
+let currentTeamId = null;
 
 export async function renderChat(app) {
+  if (pollTimeoutId) { clearTimeout(pollTimeoutId); pollTimeoutId = null; }
+  lastSince = null;
+  retryCount = 0;
+  isFocused = false;
+
   const user = Auth.user();
-  const teamId = user?.team_id;
+  currentTeamId = user?.team_id;
 
   app.innerHTML = `
     <div class="min-h-screen bg-gray-100 flex flex-col">
@@ -29,7 +37,7 @@ export async function renderChat(app) {
       <!-- 모바일 메뉴 -->
       <div id="mobile-menu" class="hidden fixed inset-0 z-50 bg-black bg-opacity-40" onclick="this.classList.add('hidden')">
         <div class="absolute right-0 top-0 h-full w-64 bg-white shadow-xl p-4" onclick="event.stopPropagation()">
-          <p class="text-sm font-medium text-gray-800 mb-4 px-2">${user?.email || ''}</p>
+          <p class="text-sm font-medium text-gray-800 mb-4 px-2">${escHtml(user?.email || '')}</p>
           <nav class="space-y-1">
             <a href="#/kanban" onclick="document.getElementById('mobile-menu').classList.add('hidden')" class="flex items-center gap-3 px-3 py-2.5 hover:bg-gray-50 rounded-lg text-sm text-gray-700">📋 칸반</a>
             <a href="#/chat" onclick="document.getElementById('mobile-menu').classList.add('hidden')" class="flex items-center gap-3 px-3 py-2.5 bg-gray-100 rounded-lg text-sm font-medium">💬 채팅</a>
@@ -62,26 +70,28 @@ export async function renderChat(app) {
       </div>
     </div>`;
 
-  // 팀 이름 로드
   try {
-    const team = await api.get(`/api/teams/${teamId}`);
+    const team = await api.get(`/api/teams/${currentTeamId}`);
     const el = document.getElementById('team-name');
     if (el) el.textContent = team.name + ' 팀 · 채팅';
   } catch {}
 
-  await loadMessages(teamId, true);
-  startPolling(teamId);
-  setupChatEvents(teamId);
+  await loadMessages(currentTeamId, true);
+  startPolling(currentTeamId);
+  setupChatEvents(currentTeamId);
   mobileViewport();
 }
 
+// ── 메시지 로드 ──────────────────────────────────────────────────────────────
+
 async function loadMessages(teamId, initial = false) {
   const area = document.getElementById('msg-area');
-  if (!area) return;
+  if (!area) return false;
   const user = Auth.user();
   try {
     const url = `/api/teams/${teamId}/messages${!initial && lastSince ? `?since=${lastSince}` : ''}`;
     const msgs = await api.get(url);
+
     if (msgs.length === 0 && initial) {
       area.innerHTML = `
         <div class="flex flex-col items-center justify-center h-full text-center py-16">
@@ -89,7 +99,8 @@ async function loadMessages(teamId, initial = false) {
           <p class="text-gray-500 font-medium">아직 대화가 없습니다</p>
           <p class="text-gray-400 text-sm mt-1">첫 메시지를 보내 팀원과 대화를 시작하세요</p>
         </div>`;
-      return;
+      setOnline(true);
+      return true;
     }
     if (initial && msgs.length > 0) area.innerHTML = '';
 
@@ -110,6 +121,17 @@ async function loadMessages(teamId, initial = false) {
           </div>
           ${isMe ? `<p class="text-xs text-gray-400 mt-1 text-right">${fmtTime(m.created_at)}</p>` : ''}
         </div>`;
+
+      // F·02: 모바일 꾸욱 누르기 → 본인 메시지 삭제 메뉴
+      if (isMe) {
+        let ltMsg;
+        div.addEventListener('touchstart', () => {
+          ltMsg = setTimeout(() => showMsgContextMenu(m.id), 600);
+        }, { passive: true });
+        div.addEventListener('touchend', () => clearTimeout(ltMsg), { passive: true });
+        div.addEventListener('touchmove', () => clearTimeout(ltMsg), { passive: true });
+      }
+
       area.appendChild(div);
     });
 
@@ -118,23 +140,51 @@ async function loadMessages(teamId, initial = false) {
       area.scrollTop = area.scrollHeight;
     }
     setOnline(true);
+    return true;
   } catch {
     setOnline(false);
+    return false;
   }
 }
 
+// ── E·04: Exponential backoff 폴링 ───────────────────────────────────────────
+
 function startPolling(teamId) {
-  if (pollTimer) clearInterval(pollTimer);
+  if (pollTimeoutId) clearTimeout(pollTimeoutId);
+
   const input = document.getElementById('msg-input');
-  let interval = 5000;
+  input?.addEventListener('focus', () => { isFocused = true; });
+  input?.addEventListener('blur', () => { isFocused = false; });
 
-  input?.addEventListener('focus', () => { clearInterval(pollTimer); pollTimer = setInterval(() => loadMessages(teamId), 2000); });
-  input?.addEventListener('blur', () => { clearInterval(pollTimer); pollTimer = setInterval(() => loadMessages(teamId), 5000); });
+  window.addEventListener('hashchange', () => {
+    if (pollTimeoutId) { clearTimeout(pollTimeoutId); pollTimeoutId = null; }
+  }, { once: true });
 
-  pollTimer = setInterval(() => loadMessages(teamId), interval);
-
-  window.addEventListener('hashchange', () => { clearInterval(pollTimer); }, { once: true });
+  schedulePoll(teamId);
 }
+
+async function schedulePoll(teamId) {
+  if (!document.getElementById('msg-area')) return;
+  const success = await loadMessages(teamId);
+  if (!document.getElementById('msg-area')) return;
+
+  if (success) {
+    retryCount = 0;
+  } else {
+    retryCount++;
+  }
+
+  const baseDelay = isFocused ? 2000 : 5000;
+  const delay = retryCount === 0
+    ? baseDelay
+    : Math.min(baseDelay * Math.pow(2, retryCount - 1), 60000);
+
+  if (document.getElementById('msg-area')) {
+    pollTimeoutId = setTimeout(() => schedulePoll(teamId), delay);
+  }
+}
+
+// ── 채팅 이벤트 ──────────────────────────────────────────────────────────────
 
 function setupChatEvents(teamId) {
   const input = document.getElementById('msg-input');
@@ -163,6 +213,8 @@ function setupChatEvents(teamId) {
       input.value = '';
       counter.textContent = '0 / 1000';
       input.style.height = 'auto';
+      // 전송 후 즉시 로드 (폴링 재설정)
+      retryCount = 0;
       await loadMessages(teamId);
     } catch {} finally {
       sendBtn.disabled = false;
@@ -171,7 +223,7 @@ function setupChatEvents(teamId) {
 
   document.getElementById('hamburger')?.addEventListener('click', () => document.getElementById('mobile-menu').classList.remove('hidden'));
   document.getElementById('mob-logout')?.addEventListener('click', async () => {
-    await api.post('/api/auth/logout');
+    await api.post('/api/auth/logout').catch(() => {});
     Auth.clear();
     location.hash = '#/login';
   });
@@ -180,6 +232,41 @@ function setupChatEvents(teamId) {
     const el = document.querySelector(`[data-msg-id="${id}"]`);
     try { await api.delete(`/api/messages/${id}`); el?.remove(); } catch {}
   };
+}
+
+// F·02: 모바일 꾸욱 누르기 컨텍스트 메뉴
+function showMsgContextMenu(msgId) {
+  document.getElementById('msg-ctx-menu')?.remove();
+  const menu = document.createElement('div');
+  menu.id = 'msg-ctx-menu';
+  menu.className = 'fixed z-50 bg-white rounded-xl shadow-xl border p-2 min-w-40';
+  menu.style.cssText = 'top:50%;left:50%;transform:translate(-50%,-50%)';
+  menu.innerHTML = `<button class="block px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 rounded-lg w-full text-left">🗑 메시지 삭제</button>`;
+  document.body.appendChild(menu);
+  menu.querySelector('button').onclick = async () => {
+    menu.remove();
+    const el = document.querySelector(`[data-msg-id="${msgId}"]`);
+    try { await api.delete(`/api/messages/${msgId}`); el?.remove(); } catch {}
+  };
+  setTimeout(() => document.addEventListener('click', () => document.getElementById('msg-ctx-menu')?.remove(), { once: true }), 0);
+}
+
+// ── 상태 표시 ────────────────────────────────────────────────────────────────
+
+function setOnline(online) {
+  const el = document.getElementById('poll-status');
+  const offlineMsg = document.getElementById('offline-msg');
+  if (!el) return;
+  if (online) {
+    el.textContent = '● 5초마다 새로고침';
+    el.className = 'text-xs text-teal-500 hidden md:block';
+    offlineMsg?.classList.add('hidden');
+  } else {
+    const nextSec = retryCount === 0 ? 5 : Math.min(5 * Math.pow(2, retryCount - 1), 60);
+    el.textContent = `⚠ 연결 끊김 · ${nextSec}초 후 재시도 (${retryCount}회)`;
+    el.className = 'text-xs text-red-500'; // 모바일에서도 표시
+    offlineMsg?.classList.remove('hidden');
+  }
 }
 
 function mobileViewport() {
@@ -193,17 +280,10 @@ function mobileViewport() {
   });
 }
 
-function setOnline(online) {
-  const el = document.getElementById('poll-status');
-  if (!el) return;
-  el.textContent = online ? '● 5초마다 새로고침' : '⚠ 연결 끊김 · 재시도 중';
-  el.className = `text-xs hidden md:block ${online ? 'text-teal-500' : 'text-red-500'}`;
-}
-
 function fmtTime(iso) {
   try { return new Date(iso).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }); } catch { return ''; }
 }
 
 function escHtml(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }

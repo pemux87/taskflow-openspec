@@ -45,7 +45,9 @@ export function renderLogin(app) {
         password: document.getElementById('password').value,
       });
       Auth.save(res.token, res.user);
-      location.hash = res.user.team_id ? '#/kanban' : '#/team';
+      btn.textContent = '✓ 성공! 이동 중…';
+      btn.className = 'w-full bg-green-600 text-white rounded-lg py-3 font-semibold transition disabled:opacity-60';
+      setTimeout(() => { location.hash = res.user.team_id ? '#/kanban' : '#/team'; }, 400);
     } catch (err) {
       errorText.textContent = err?.error?.message || '로그인 중 오류가 발생했습니다';
       errorMsg.classList.remove('hidden');
