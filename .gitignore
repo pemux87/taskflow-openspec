@@ -4,6 +4,9 @@
 .env.local
 __pycache__/
 *.pyc
+*.pyo
 .vercel
 node_modules/
 .claude/settings.local.json
+venv/
+.venv/
