@@ -1,12 +1,9 @@
 import os
 from contextlib import asynccontextmanager
-from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
-from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
-from starlette.responses import FileResponse
 from mangum import Mangum
 
 from api.database import engine
@@ -40,15 +37,5 @@ app.include_router(auth.router)
 app.include_router(teams.router)
 app.include_router(tasks.router)
 app.include_router(messages.router)
-
-# 정적 파일 및 SPA 라우팅
-public_dir = Path(__file__).parent.parent / "public"
-
-@app.get("/{full_path:path}")
-async def serve_spa(full_path: str):
-    file_path = public_dir / full_path
-    if file_path.exists() and file_path.is_file():
-        return FileResponse(file_path)
-    return FileResponse(public_dir / "index.html")
 
 handler = Mangum(app)
